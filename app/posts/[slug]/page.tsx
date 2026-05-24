@@ -1,11 +1,10 @@
-import { getAllPosts, getPostBySlug } from "@/lib/posts";
+import { getAllPosts, getPostBySlug, apiGetAllPosts, apiGetPostContentHtml } from "@/lib/posts";
 import { notFound } from "next/navigation";
 import Link from "next/link";
+import fs from "fs";
+import path from "path";
 
-export async function generateStaticParams() {
-  const posts = getAllPosts();
-  return posts.map((post) => ({ slug: post.slug }));
-}
+export const dynamic = "force-dynamic";
 
 export default async function PostPage({
   params,
@@ -13,21 +12,24 @@ export default async function PostPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const post = getPostBySlug(slug);
 
+  // Try filesystem meta first, then API
+  let post = getPostBySlug(slug);
   if (!post) {
-    notFound();
+    const all = await apiGetAllPosts();
+    post = all.find((p) => p.slug === slug) || null;
   }
-
-  const { default: MDXContent } = await import(
-    `@/content/posts/${slug}.mdx`
-  );
+  if (!post) notFound();
 
   const formattedDate = new Date(post.date).toLocaleDateString("zh-CN", {
     year: "numeric",
     month: "long",
     day: "numeric",
   });
+
+  // Check if MDX file exists (build-time post)
+  const mdxPath = path.join(process.cwd(), "content/posts", `${slug}.mdx`);
+  const hasMdx = fs.existsSync(mdxPath);
 
   return (
     <div className="max-w-2xl mx-auto px-6 py-12">
@@ -57,7 +59,13 @@ export default async function PostPage({
       </header>
 
       <article className="prose">
-        <MDXContent />
+        {hasMdx ? (
+          // Build-time MDX import
+          <MdxContent slug={slug} />
+        ) : (
+          // Runtime: render markdown via API
+          <RuntimeContent slug={slug} />
+        )}
       </article>
 
       <hr className="mt-12 mb-8" />
@@ -70,4 +78,14 @@ export default async function PostPage({
       </Link>
     </div>
   );
+}
+
+async function MdxContent({ slug }: { slug: string }) {
+  const { default: Content } = await import(`@/content/posts/${slug}.mdx`);
+  return <Content />;
+}
+
+async function RuntimeContent({ slug }: { slug: string }) {
+  const html = await apiGetPostContentHtml(slug);
+  return <div dangerouslySetInnerHTML={{ __html: html }} />;
 }
